@@ -1,0 +1,268 @@
+import express from "express";
+import Razorpay from "razorpay";
+import cors from "cors";
+import bodyParser from "body-parser";
+import dotenv from "dotenv";
+import { initializeApp, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
+import serviceAccount from "./firebase_key.json" assert { type: "json" };
+import jwt from "jsonwebtoken";
+import { popGraphicsState } from "pdf-lib";
+
+// Load environment variables
+dotenv.config();
+
+const app = express();
+app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:5173', // Your frontend origin
+  credentials: true
+}));
+app.use(bodyParser.json());
+
+// Initialize Firebase
+initializeApp({
+  credential: cert(serviceAccount),
+});
+const db = getFirestore();
+const auth = getAuth();
+
+// Initialize Razorpay
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+// JWT Middleware
+const verifyToken = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+
+    if (!token) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await auth.getUser(decoded.uid);
+    req.user = user;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+};
+
+// Auth Routes
+app.post("/signup", async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+
+    // Create user in Firebase Auth
+    const userRecord = await auth.createUser({
+      email,
+      password,
+      displayName: name,
+    });
+
+    // Create user document in Firestore
+    await db.collection("Users").doc(userRecord.uid).set({
+      name,
+      email,
+      role: "user",
+      photo: "",
+      createdAt: new Date().toISOString(),
+    });
+
+    // Generate JWT
+    const token = jwt.sign(
+      {
+        uid: userRecord.uid,
+        name,
+        email,
+        role: "user",
+        // photo:false
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    res.status(201).json({
+      message: "User created successfully",
+      token,
+      user: {
+        uid: userRecord.uid,
+        email,
+        name,
+        role: "user",
+        token:token,
+        // photo:false
+      },
+    });
+  } catch (error) {
+    console.error("Signup error:", error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/login", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // Find user by email
+    const userRecord = await auth.getUserByEmail(email);
+    const userDoc = await db.collection("Users").doc(userRecord.uid).get();
+    const userData = userDoc.data();
+
+    // Generate JWT
+    const token = jwt.sign(
+      {
+        uid: userRecord.uid,
+        name:userRecord.name,
+        email: userRecord.email,
+        role: userData.role,
+        // photo:userData.photo || false
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    res.json({
+      token,
+      user: {
+        uid: userRecord.uid,
+        email: userRecord.email,
+        name: userData.name,
+        role: userData.role,
+        token:token,
+      // photo:userData.photo || false
+      },
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Token Verification Endpoint
+app.get("verify", verifyToken, async (req, res) => {
+  try {
+    // Get fresh user data from Firestore
+    const userDoc = await db.collection("Users").doc(req.user.uid).get();
+    const userData = userDoc.data();
+
+    res.json({
+      valid: true,
+      user: {
+        uid: req.user.uid,
+        email: req.user.email,
+        name: userData.name,
+        role: userData.role,
+        photo: userData.photo,
+      },
+    });
+  } catch (error) {
+    console.error("Token verification error:", error);
+    res.status(401).json({
+      valid: false,
+      error: "Token verification failed",
+    });
+  }
+});
+
+// Google Auth
+app.post("/auth/google", async (req, res) => {
+  try {
+    const { uid, email, name, photo } = req.body;
+
+    // Verify the user exists in Firebase Auth
+    const userRecord = await auth.getUser(uid);
+
+    // Create or update user document
+    await db
+      .collection("Users")
+      .doc(uid)
+      .set(
+        {
+          name,
+          email,
+          photo: photo || "",
+          role: "user",
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
+    // Generate JWT
+    // alert(photo)
+    const token = jwt.sign(
+      {
+        uid,
+        name,
+        email,
+        role: "user",
+        photo
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    res.json({
+      token,
+      user: {
+        uid,
+        email,
+        name,
+        role: "user",
+        photo
+        
+      },
+    });
+  } catch (error) {
+    console.error("Google auth error:", error);
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Protected Routes - example of using verifyToken middleware
+app.post("/create-order", verifyToken, async (req, res) => {
+  try {
+    const options = {
+      amount: req.body.amount * 100,
+      currency: "INR",
+      receipt: `order_rcptid_${Date.now()}`,
+      notes: {
+        userId: req.user.uid,
+      },
+    };
+
+    const order = await razorpay.orders.create(options);
+    res.json(order);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to create order" });
+  }
+});
+
+app.post("/verify-payment", verifyToken, async (req, res) => {
+  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } =
+    req.body;
+
+  try {
+    await db.collection("transactions").add({
+      payment_id: razorpay_payment_id,
+      order_id: razorpay_order_id,
+      signature: razorpay_signature,
+      userId: req.user.uid,
+      timestamp: new Date(),
+    });
+
+    res.json({ success: true, message: "Payment verified and saved" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Payment verification failed" });
+  }
+});
+
+// Start Server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

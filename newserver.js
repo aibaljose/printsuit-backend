@@ -7,7 +7,6 @@ import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import jwt from "jsonwebtoken";
-import { popGraphicsState } from "pdf-lib";
 import nodemailer from "nodemailer";
 
 // Load environment variables

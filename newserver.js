@@ -6,14 +6,13 @@ import dotenv from "dotenv";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
-import serviceAccount from "./firebase_key.json" assert { type: "json" };
 import jwt from "jsonwebtoken";
 import { popGraphicsState } from "pdf-lib";
 import nodemailer from "nodemailer";
 
 // Load environment variables
 dotenv.config();
-
+const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
 const app = express();
 app.use(cors());
 app.use(cors({

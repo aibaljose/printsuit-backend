@@ -13,11 +13,29 @@ import nodemailer from "nodemailer";
 dotenv.config();
 const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
 const app = express();
-app.use(cors());
-app.use(cors({
-  origin: 'http://printsuit.readdailyai.online/', // Your frontend origin
-  credentials: true
-}));
+// app.use(cors());
+
+
+
+
+const allowedOrigins = [
+  "http://printsuit.readdailyai.online",
+  "http://localhost:5173" // Allow frontend during development
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true // Allow cookies & authentication headers
+  })
+);
+
 app.use(bodyParser.json());
 
 // Initialize Firebase with explicit project ID

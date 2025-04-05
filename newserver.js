@@ -20,7 +20,7 @@ const app = express();
 
 const allowedOrigins = [
   "http://printsuit.readdailyai.online",
-  "https://printsuit.readdailyai.online/",
+  "https://printsuit.readdailyai.online",
   "http://localhost:5173" // Allow frontend during development
 ];
 
